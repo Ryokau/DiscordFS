@@ -27,6 +27,14 @@ public class ChunkManager
             data = ms.ToArray();
         }
 
+        return FragmentAndEncrypt(data, encrypt);
+    }
+
+    /// <summary>
+    /// Criptografa (se habilitado) e fragmenta um array de bytes.
+    /// </summary>
+    public IEnumerable<ChunkData> FragmentAndEncrypt(byte[] data, bool encrypt = true)
+    {
         // Criptografar arquivo inteiro antes de fragmentar
         if (encrypt && _encryptor != null)
         {
@@ -108,19 +116,30 @@ public class ChunkManager
 
         var reassembled = ReassembleChunks(downloadedChunks);
 
-        // Descriptografar se encryptor disponível
+        // Tentar descriptografar se encryptor disponível
         if (decrypt && _encryptor != null)
         {
-            Console.WriteLine($"[Crypto] Descriptografando {reassembled.Length} bytes...");
-            try
+            // Verificar se parece estar criptografado (tem header AES-GCM: IV + Tag >= 28 bytes)
+            if (reassembled.Length >= 28)
             {
-                reassembled = _encryptor.Decrypt(reassembled);
-                Console.WriteLine($"[Crypto] Dados recuperados: {reassembled.Length} bytes");
+                Console.WriteLine($"[Crypto] Tentando descriptografar {reassembled.Length} bytes...");
+                try
+                {
+                    var decrypted = _encryptor.Decrypt(reassembled);
+                    Console.WriteLine($"[Crypto] Dados recuperados: {decrypted.Length} bytes");
+                    return decrypted;
+                }
+                catch (System.Security.Cryptography.CryptographicException)
+                {
+                    // Arquivo provavelmente não estava criptografado (versão antiga)
+                    Console.WriteLine($"[Crypto] Arquivo não criptografado (versão legada), retornando dados brutos");
+                    return reassembled;
+                }
             }
-            catch (System.Security.Cryptography.CryptographicException ex)
+            else
             {
-                Console.WriteLine($"[Crypto] ERRO: {ex.Message}");
-                throw;
+                Console.WriteLine($"[Crypto] Arquivo muito pequeno para ter header AES-GCM, retornando dados brutos");
+                return reassembled;
             }
         }
 

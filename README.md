@@ -13,6 +13,7 @@ A secure virtual file system that uses Discord as an encrypted storage backend. 
 - **Virtual Drive**: Mounts a drive (e.g., Z:) visible in Windows Explorer
 - **Automatic Upload**: Files are chunked and uploaded to Discord
 - **On-Demand Download**: Chunks are downloaded and reassembled when needed
+- **Legacy Compatibility**: Auto-detects unencrypted files from older versions
 
 ### Security
 - **🔐 AES-256-GCM Encryption**: Files are encrypted before chunking with unique IV per file
@@ -31,15 +32,10 @@ A secure virtual file system that uses Discord as an encrypted storage backend. 
 ## 🚀 Quick Start
 
 ```bash
-# Clone
 git clone https://github.com/Ryokau/DiscordFS.git
 cd DiscordFS
-
-# Configure
 cp appsettings.example.json appsettings.json
 # Edit appsettings.json with your bot token and channel ID
-
-# Run
 dotnet run
 ```
 
@@ -71,18 +67,14 @@ dotnet run
 │  Your File   │────▶│ AES-256-GCM  │────▶│   Chunking   │────▶│   Discord    │
 │  (plaintext) │     │  Encryption  │     │   (9MB max)  │     │   Storage    │
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
-                            │                    │
-                            ▼                    ▼
-                     Unique IV/Key        Obfuscated Names
-                     per file             (img_cache_xxx.jpg)
 ```
 
-### What Discord Sees
+**What Discord Sees:**
 - Random file names like `cache_a1b2c3d4.jpg`
 - Encrypted binary blobs (no metadata)
 - Minimal messages with just 📎 emoji
 
-### What You Control
+**What You Control:**
 - Master key stored locally
 - Metadata in local SQLite
 - Full file names and structure

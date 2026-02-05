@@ -318,7 +318,8 @@ public class DiscordFileSystem : IDokanOperations
 
         Console.WriteLine($"[Upload] Iniciando upload de {path} ({data.Length / 1024.0:F1} KB)");
 
-        var chunks = _chunkManager.FragmentBytes(data).ToList();
+        // IMPORTANTE: Usar FragmentAndEncrypt para criptografar antes de fragmentar
+        var chunks = _chunkManager.FragmentAndEncrypt(data, encrypt: true).ToList();
         var uploadedChunks = new List<ChunkReference>();
 
 
