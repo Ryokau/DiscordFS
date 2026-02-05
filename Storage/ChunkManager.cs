@@ -1,22 +1,55 @@
 using System.IO.Hashing;
 using DiscordFS.Models;
+using DiscordFS.Security;
 
 namespace DiscordFS.Storage;
 
 public class ChunkManager
 {
-    public const int CHUNK_SIZE = 9 * 1024 * 1024; // 9MB - margem de segurança para limite de 10MB do Discord
+    public const int CHUNK_SIZE = 9 * 1024 * 1024; // 9MB - margem para limite de 10MB do Discord
 
-    public IEnumerable<ChunkData> FragmentFile(Stream fileStream)
+    private readonly FileEncryptor? _encryptor;
+
+    public ChunkManager(FileEncryptor? encryptor = null)
     {
-        var buffer = new byte[CHUNK_SIZE];
-        int bytesRead;
+        _encryptor = encryptor;
+    }
+
+    /// <summary>
+    /// Fragmenta um arquivo, opcionalmente criptografando antes.
+    /// </summary>
+    public IEnumerable<ChunkData> FragmentFile(Stream fileStream, bool encrypt = true)
+    {
+        byte[] data;
+        using (var ms = new MemoryStream())
+        {
+            fileStream.CopyTo(ms);
+            data = ms.ToArray();
+        }
+
+        // Criptografar arquivo inteiro antes de fragmentar
+        if (encrypt && _encryptor != null)
+        {
+            Console.WriteLine($"[Crypto] Criptografando {data.Length} bytes...");
+            data = _encryptor.Encrypt(data);
+            Console.WriteLine($"[Crypto] Resultado: {data.Length} bytes (overhead: IV + Tag)");
+        }
+
+        return FragmentBytes(data);
+    }
+
+    public IEnumerable<ChunkData> FragmentBytes(byte[] data)
+    {
+        int offset = 0;
         int chunkIndex = 0;
 
-        while ((bytesRead = fileStream.Read(buffer, 0, CHUNK_SIZE)) > 0)
+        while (offset < data.Length)
         {
-            var chunkBytes = new byte[bytesRead];
-            Array.Copy(buffer, chunkBytes, bytesRead);
+            int remaining = data.Length - offset;
+            int chunkSize = Math.Min(CHUNK_SIZE, remaining);
+            
+            var chunkBytes = new byte[chunkSize];
+            Buffer.BlockCopy(data, offset, chunkBytes, 0, chunkSize);
 
             yield return new ChunkData
             {
@@ -24,15 +57,8 @@ public class ChunkManager
                 Data = chunkBytes,
                 Crc32 = CalculateCrc32(chunkBytes)
             };
-        }
-    }
 
-    public IEnumerable<ChunkData> FragmentBytes(byte[] data)
-    {
-        using var stream = new MemoryStream(data);
-        foreach (var chunk in FragmentFile(stream))
-        {
-            yield return chunk;
+            offset += chunkSize;
         }
     }
 
@@ -46,16 +72,21 @@ public class ChunkManager
         return output.ToArray();
     }
 
+    /// <summary>
+    /// Recompõe chunks e descriptografa se necessário.
+    /// </summary>
     public async Task<byte[]> ReassembleFromReferencesAsync(
         IEnumerable<ChunkReference> chunks,
-        Func<string, Task<byte[]>> downloadFunc)
+        Func<string, Task<byte[]>> downloadFunc,
+        bool decrypt = true)
     {
         var orderedChunks = chunks.OrderBy(c => c.ChunkIndex).ToList();
         var downloadedChunks = new byte[orderedChunks.Count][];
 
-        // Download paralelo para performance
-        var tasks = orderedChunks.Select(async (chunk, idx) =>
+        // Download sequencial com pequeno jitter para evitar detecção
+        for (int i = 0; i < orderedChunks.Count; i++)
         {
+            var chunk = orderedChunks[i];
             var data = await downloadFunc(chunk.AttachmentUrl);
             
             // Verificar integridade
@@ -66,11 +97,34 @@ public class ChunkManager
                     $"CRC mismatch no chunk {chunk.ChunkIndex}: esperado {chunk.Crc32}, obtido {actualCrc}");
             }
             
-            downloadedChunks[idx] = data;
-        });
+            downloadedChunks[i] = data;
 
-        await Task.WhenAll(tasks);
-        return ReassembleChunks(downloadedChunks);
+            // Pequeno delay entre downloads para não parecer automação
+            if (i < orderedChunks.Count - 1)
+            {
+                await Task.Delay(Random.Shared.Next(100, 400));
+            }
+        }
+
+        var reassembled = ReassembleChunks(downloadedChunks);
+
+        // Descriptografar se encryptor disponível
+        if (decrypt && _encryptor != null)
+        {
+            Console.WriteLine($"[Crypto] Descriptografando {reassembled.Length} bytes...");
+            try
+            {
+                reassembled = _encryptor.Decrypt(reassembled);
+                Console.WriteLine($"[Crypto] Dados recuperados: {reassembled.Length} bytes");
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                Console.WriteLine($"[Crypto] ERRO: {ex.Message}");
+                throw;
+            }
+        }
+
+        return reassembled;
     }
 
     public uint CalculateCrc32(byte[] data)
@@ -83,6 +137,8 @@ public class ChunkManager
 
     public int CalculateChunkCount(long fileSizeBytes)
     {
-        return (int)Math.Ceiling((double)fileSizeBytes / CHUNK_SIZE);
+        // Considerar overhead de criptografia (~28 bytes por arquivo)
+        var adjustedSize = fileSizeBytes + 28;
+        return (int)Math.Ceiling((double)adjustedSize / CHUNK_SIZE);
     }
 }

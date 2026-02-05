@@ -3,6 +3,7 @@ using DokanNet;
 using DiscordFS.Discord;
 using DiscordFS.FileSystem;
 using DiscordFS.Storage;
+using DiscordFS.Security;
 
 namespace DiscordFS;
 
@@ -11,8 +12,8 @@ class Program
     static async Task Main(string[] args)
     {
         Console.WriteLine("╔═══════════════════════════════════════════╗");
-        Console.WriteLine("║         DiscordFS - Virtual Drive         ║");
-        Console.WriteLine("║   Armazenamento ilimitado via Discord     ║");
+        Console.WriteLine("║       DiscordFS - Secure Virtual Drive    ║");
+        Console.WriteLine("║   Armazenamento criptografado via Discord ║");
         Console.WriteLine("╚═══════════════════════════════════════════╝");
         Console.WriteLine();
 
@@ -26,6 +27,10 @@ class Program
         var channelIdStr = config["Discord:ChannelId"];
         var driveLetter = config["FileSystem:DriveLetter"] ?? "Z";
         var cacheSizeMB = int.Parse(config["FileSystem:CacheSizeMB"] ?? "256");
+        
+        // Configurações de segurança
+        var enableEncryption = bool.Parse(config["Security:EnableEncryption"] ?? "true");
+        var masterKeyBase64 = config["Security:MasterKey"];
 
         if (string.IsNullOrEmpty(botToken) || botToken == "YOUR_BOT_TOKEN_HERE")
         {
@@ -46,6 +51,50 @@ class Program
             Console.WriteLine("  4. Cole o ID em appsettings.json");
             Console.ResetColor();
             return;
+        }
+
+        // Configurar criptografia
+        FileEncryptor? encryptor = null;
+        var keyFilePath = Path.Combine(AppContext.BaseDirectory, ".masterkey");
+
+        if (enableEncryption)
+        {
+            Console.WriteLine("[Security] Criptografia habilitada (AES-256-GCM)");
+            
+            byte[] masterKey;
+            
+            if (!string.IsNullOrEmpty(masterKeyBase64))
+            {
+                // Usar chave do config
+                masterKey = Convert.FromBase64String(masterKeyBase64);
+                Console.WriteLine("[Security] Usando chave do appsettings.json");
+            }
+            else if (File.Exists(keyFilePath))
+            {
+                // Carregar chave existente
+                masterKey = Convert.FromBase64String(File.ReadAllText(keyFilePath));
+                Console.WriteLine("[Security] Chave carregada de .masterkey");
+            }
+            else
+            {
+                // Gerar nova chave
+                masterKey = FileEncryptor.GenerateMasterKey();
+                File.WriteAllText(keyFilePath, Convert.ToBase64String(masterKey));
+                
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("[Security] NOVA chave gerada e salva em .masterkey");
+                Console.WriteLine("           GUARDE ESTE ARQUIVO EM LOCAL SEGURO!");
+                Console.WriteLine($"           Key: {Convert.ToBase64String(masterKey)}");
+                Console.ResetColor();
+            }
+
+            encryptor = new FileEncryptor(masterKey);
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("[Security] AVISO: Criptografia DESABILITADA!");
+            Console.ResetColor();
         }
 
         var mountPoint = $"{driveLetter}:\\";
@@ -80,7 +129,8 @@ class Program
         Console.WriteLine("[Init] Configurando cache...");
         var cache = new ChunkCache(cacheSizeMB);
 
-        var chunkManager = new ChunkManager();
+        Console.WriteLine("[Init] Criando chunk manager com criptografia...");
+        var chunkManager = new ChunkManager(encryptor);
 
         Console.WriteLine("[Init] Criando sistema de arquivos...");
         var fileSystem = new DiscordFileSystem(
@@ -147,9 +197,9 @@ class Program
         Console.WriteLine("[Cleanup] Limpando recursos...");
         dokanInstance?.Dispose();
         database.Dispose();
+        encryptor?.Dispose();
         await discordClient.DisposeAsync();
 
         Console.WriteLine("[Exit] DiscordFS encerrado.");
     }
 }
-
